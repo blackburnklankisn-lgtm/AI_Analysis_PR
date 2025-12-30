@@ -27,20 +27,40 @@ class JiraConnector:
             raise
 
     def get_issue(self, issue_key: str) -> Dict[str, Any]:
-        issue = self.jira.issue(issue_key)
-        attachments = []
+        issue = self.jira.issue(issue_key, expand="comments,attachments")
+        
+        # Extract Attachments
+        images = []
+        logs = []
         for attachment in issue.fields.attachment:
-            attachments.append({
+            item = {
                 "filename": attachment.filename,
                 "url": attachment.content,
-                "id": attachment.id
-            })
+                "id": attachment.id,
+                "size": getattr(attachment, 'size', 0)
+            }
+            if attachment.filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):
+                images.append(item)
+            elif attachment.filename.lower().endswith(('.log', '.txt')):
+                logs.append(item)
         
+        # Extract Comments
+        comments = []
+        for comment in issue.fields.comment.comments:
+            comments.append({
+                "author": str(comment.author),
+                "body": comment.body,
+                "created": comment.created
+            })
+            
         return {
             "key": issue.key,
             "summary": issue.fields.summary,
-            "description": issue.fields.description,
-            "attachments": attachments
+            "description": issue.fields.description or "",
+            "attachments": logs + images,  # Compatibility
+            "images": images,
+            "logs": logs,
+            "comments": comments
         }
 
     def download_attachment(self, url: str, destination_path: str):
@@ -50,16 +70,31 @@ class JiraConnector:
                 if chunk:
                     f.write(chunk)
 
-    def search_issues(self, query: str, max_results: int = 5) -> List[Dict[str, Any]]:
-        # Simple search using keywords
-        jql = f'summary ~ "{query}" OR description ~ "{query}" ORDER BY created DESC'
-        issues = self.jira.search_issues(jql, maxResults=max_results)
-        results = []
-        for issue in issues:
-            results.append({
-                "key": issue.key,
-                "summary": issue.fields.summary,
-                "description": issue.fields.description,
-                "root_cause": getattr(issue.fields, "customfield_10000", "Unknown") # Placeholder for root cause field
-            })
-        return results
+    def search_issues(self, jql: str, max_results: int = 5) -> List[Dict[str, Any]]:
+        # If it's already a complex JQL (contains ~, =, OR), use it directly
+        # Otherwise, wrap it in a text search
+        if not any(op in jql for op in ['~', '=', 'OR', 'AND']):
+            jql = f'text ~ "{jql}" ORDER BY created DESC'
+        
+        print(f"Executing JQL: {jql}")
+        
+        try:
+            issues = self.jira.search_issues(jql, maxResults=max_results)
+            results = []
+            for issue in issues:
+                # Attempt to find a root cause field, or use a default
+                # customfield_10000 is often used but varies by Jira instance
+                rc = "N/A"
+                if hasattr(issue.fields, "customfield_10000") and issue.fields.customfield_10000:
+                    rc = str(issue.fields.customfield_10000)
+                
+                results.append({
+                    "key": issue.key,
+                    "summary": issue.fields.summary,
+                    "description": issue.fields.description or "",
+                    "root_cause": rc
+                })
+            return results
+        except Exception as e:
+            print(f"Jira search failed for JQL '{jql}': {e}")
+            return []

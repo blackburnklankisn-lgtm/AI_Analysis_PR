@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Next.js
+.next/
+out/
+build/
+
+# Application Data
+backend/data/*
+!backend/data/.gitkeep
+
+# Local environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDEs
+.vscode/
+.idea/
+
+# System Files
+.DS_Store
+Thumbs.db

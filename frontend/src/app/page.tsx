@@ -17,16 +17,38 @@ export default function Home() {
   const [statuses, setStatuses] = useState<Record<string, StepStatus>>({});
   const [diagnosticResult, setDiagnosticResult] = useState<any>(null);
 
-  // Config State (Should ideally be in localStorage)
+  // Config State with Persistence
   const [config, setConfig] = useState({
-    gemini_api_key: '',
-    customer_username: '',
-    customer_password: '',
+    gemini_api_key: 'AIzaSyDiqX81ElLi8tKMAlJ99Ke6tQKJByx6-yE',
+    customer_username: 'qiaoye.li',
+    customer_password: 'lqy123456',
     customer_jira_url: 'https://jira.gacrnd.com:8443',
-    internal_username: '',
-    internal_password: '',
+    internal_username: 'uie85246',
+    internal_password: 'LQY123abcde',
     internal_jira_url: 'https://ix.jira.automotive.cloud'
   });
+
+  const [mounted, setMounted] = React.useState(false);
+
+  // Load from localStorage on mount
+  React.useEffect(() => {
+    setMounted(true);
+    const savedConfig = localStorage.getItem('jira_ai_config');
+    if (savedConfig) {
+      try {
+        setConfig(JSON.parse(savedConfig));
+      } catch (e) {
+        console.error("Failed to parse saved config", e);
+      }
+    }
+  }, []);
+
+  // Save to localStorage when config changes
+  React.useEffect(() => {
+    if (mounted) {
+      localStorage.setItem('jira_ai_config', JSON.stringify(config));
+    }
+  }, [config, mounted]);
 
   const handleDiagnose = async () => {
     if (!issueKey) return;
@@ -170,6 +192,7 @@ export default function Home() {
         report={diagnosticResult?.report}
         summary={diagnosticResult?.summary}
         issueKey={diagnosticResult?.issue_key}
+        trace={diagnosticResult?.trace}
       />
 
       <SettingsModal

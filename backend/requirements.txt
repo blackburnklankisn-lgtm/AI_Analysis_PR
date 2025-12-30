@@ -2,7 +2,7 @@ fastapi
 uvicorn
 jira
 google-generativeai
-python-dotenv
 pydantic
+urllib3
 python-multipart
-requests
+Pillow

@@ -19,6 +19,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from fastapi.responses import JSONResponse
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc)},
+        headers={"Access-Control-Allow-Origin": "*"}
+    )
+
 class DiagnosticRequest(BaseModel):
     issue_key: str
     gemini_api_key: str
@@ -36,12 +45,22 @@ def health_check():
 @app.post("/diagnose")
 async def run_diagnostic(req: DiagnosticRequest):
     print(f"Received diagnostic request for issue: {req.issue_key}")
-    # Base path for temporary files
+    # Initialize trace with all possible fields
+    trace = {
+        "extracted_keywords": [],
+        "stratified_keywords": {"core_intent": [], "fingerprints": [], "general_terms": []},
+        "initial_search_query": "",
+        "historical_candidates": [],
+        "deep_context_count": 0,
+        "raw_prompt": "",
+        "raw_ai_response": ""
+    }
+    
     temp_dir = f"data/{req.issue_key}"
     os.makedirs(temp_dir, exist_ok=True)
 
     try:
-        # 1. Connect and Fetch
+        # 1. Initialization and Step 1: Fetch Current Issue Full Details
         customer_jira = JiraConnector(req.customer_jira_url, req.customer_username, req.customer_password)
         internal_jira = JiraConnector(req.internal_jira_url, req.internal_username, req.internal_password)
         
@@ -52,7 +71,6 @@ async def run_diagnostic(req: DiagnosticRequest):
             current_issue = customer_jira.get_issue(req.issue_key)
         except Exception as e:
             if "404" in str(e):
-                print(f"Issue {req.issue_key} not found in Customer Jira, trying Internal Jira...")
                 try:
                     current_issue = internal_jira.get_issue(req.issue_key)
                     source_name = "内部 Jira"
@@ -63,38 +81,126 @@ async def run_diagnostic(req: DiagnosticRequest):
             else:
                 raise e
 
-        # 2. Search Internal History
-        search_query = current_issue['summary']
-        historical_issues = internal_jira.search_issues(search_query, max_results=3)
+        ai = AIReasoning(req.gemini_api_key)
+        active_connector = customer_jira if source_name == "客户 Jira" else internal_jira
 
-        # 3. Log Processing
+        # 2. Step 2: Download Images for Current Issue & AI Keyword Extraction
+        print("Downloading images for keyword extraction...")
+        current_image_paths = []
+        for img in current_issue.get('images', []):
+            dest = os.path.join(temp_dir, f"curr_{img['filename']}")
+            active_connector.download_attachment(img['url'], dest)
+            current_image_paths.append(dest)
+
+        print("Extracting keywords via AI (Stratified)...")
+        kw_data = ai.extract_keywords(current_issue, current_image_paths)
+        trace["stratified_keywords"] = kw_data
+        trace["extracted_keywords"] = kw_data.get("core_intent", []) + kw_data.get("fingerprints", []) + kw_data.get("general_terms", [])
+        
+        # 3. Step 3: Deep Search internal Jira (Intent-Locked - Plan 5)
+        project_filter = 'project = "CGF"'
+        issuetype_filter = 'issuetype = "Problem Report (PR)"'
+        
+        # Keyword Cleaning & Sanitization logic
+        def clean_kw(k: str) -> bool:
+            if any(char in k for char in ['{', '}', '[', ']', '#', ':', '\"']): return False
+            if len(k) > 40: return False
+            if len(k.strip()) < 2: return False
+            return True
+
+        # Extract and clean groups
+        raw_intents = kw_data.get("core_intent", [])
+        raw_generals = kw_data.get("general_terms", [])
+        raw_fingerprints = kw_data.get("fingerprints", [])
+
+        valid_intents = [k for k in raw_intents if clean_kw(k)]
+        valid_details = [k for k in raw_generals if clean_kw(k)] + [k for k in raw_fingerprints if clean_kw(k)]
+        
+        # Construct Groups
+        intent_list = [f'text ~ "{k}"' for k in valid_intents]
+        detail_list = [f'text ~ "{k}"' for k in valid_details]
+        
+        intent_clause = f"({' OR '.join(intent_list)})" if intent_list else ""
+        detail_clause = f"({' OR '.join(detail_list)})" if detail_list else ""
+        
+        # Combine everything with User's specific logic: (Intent ORs) AND (Detail ORs)
+        search_query = f"{project_filter} AND {issuetype_filter}"
+        
+        if intent_clause and detail_clause:
+            search_query += f" AND {intent_clause} AND {detail_clause}"
+        elif intent_clause:
+            search_query += f" AND {intent_clause}"
+        elif detail_clause:
+            search_query += f" AND {detail_clause}"
+            
+        search_query += " ORDER BY created DESC"
+        trace["initial_search_query"] = search_query
+        
+        print(f"Coarse Retrieval (Plan 5 - Intent Locked): Searching for up to 100 candidates with JQL: {search_query}")
+        # Search for 100 candidates first (Summary only)
+        initial_candidates = internal_jira.search_issues(search_query, max_results=100)
+        
+        # 4. Step 4: Semantic Reranking (AI Refinement)
+        print(f"Semantic Reranking: AI filtering {len(initial_candidates)} candidates down to Top 20...")
+        candidate_stubs = ai.rerank_candidates(current_issue, initial_candidates, top_n=20)
+        
+        # 5. Step 5: AI Relevance Explanation for the reranked Top 20
+        print(f"Generating relevance explanations for {len(candidate_stubs)} final candidates...")
+        relevance_data = ai.generate_relevance_scores(current_issue, candidate_stubs)
+        relevance_map = {item['key']: item for item in relevance_data}
+        
+        trace["historical_candidates"] = []
+        for c in candidate_stubs:
+            rel = relevance_map.get(c['key'], {"reason": "语义重排入选", "similarity": "中", "score": 60})
+            trace["historical_candidates"].append({
+                "key": c["key"],
+                "summary": c["summary"],
+                "reason": rel.get('reason', '语义重排入选'),
+                "similarity": rel.get('similarity', '高' if c['key'] in [r['key'] for r in relevance_data] else '中'),
+                "score": rel.get('score', 70)
+            })
+        
+        # 6. Step 6: Fetch Full Details for Candidates
+        print(f"Fetching full details for {len(candidate_stubs)} candidates...")
+        full_historical_issues = []
+        for stub in candidate_stubs:
+            try:
+                full_issue = internal_jira.get_issue(stub["key"])
+                full_issue['relevance_reason'] = relevance_map.get(stub['key'], {}).get('reason', '')
+                full_historical_issues.append(full_issue)
+            except Exception as e:
+                print(f"Failed to fetch details for candidate {stub['key']}: {e}")
+        trace["deep_context_count"] = len(full_historical_issues)
+
+        # 7. Log Processing
         log_processor = LogProcessor()
         log_fingerprints = []
         
-        # Determine which connector to use for download (where the issue was found)
-        active_connector = customer_jira if source_name == "客户 Jira" else internal_jira
-        
-        for attachment in current_issue['attachments']:
-            if attachment['filename'].endswith(('.log', '.txt')):
-                dest = os.path.join(temp_dir, attachment['filename'])
-                active_connector.download_attachment(attachment['url'], dest)
-                
-                fingerprint = log_processor.process_log(dest)
-                log_fingerprints.append(f"File: {attachment['filename']}\n{fingerprint}")
+        # Process Logs
+        for log_file in current_issue.get('logs', []):
+            dest = os.path.join(temp_dir, log_file['filename'])
+            active_connector.download_attachment(log_file['url'], dest)
+            fingerprint = log_processor.process_log(dest)
+            log_fingerprints.append(f"File: {log_file['filename']}\n{fingerprint}")
         
         combined_logs = "\n\n".join(log_fingerprints) if log_fingerprints else "No logs found."
 
-        # 4. AI Reasoning
-        ai = AIReasoning(req.gemini_api_key)
-        report = ai.analyze_pr(current_issue, historical_issues, combined_logs)
+        # 6. Final AI Reasoning
+        print("Generating final diagnostic report with multimodal context...")
+        reasoning_output = ai.analyze_pr(current_issue, full_historical_issues, combined_logs, current_image_paths)
+        
+        trace["raw_prompt"] = reasoning_output["raw_prompt"]
+        trace["raw_ai_response"] = reasoning_output["raw_response"]
 
         # Cleanup
-        shutil.rmtree(temp_dir)
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
 
         return {
             "issue_key": req.issue_key,
             "summary": current_issue['summary'],
-            "report": report,
+            "report": reasoning_output["report"],
+            "trace": trace,
             "status": "success"
         }
 
