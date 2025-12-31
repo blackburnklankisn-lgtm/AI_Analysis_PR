@@ -19,7 +19,7 @@ export default function Home() {
 
   // Config State with Persistence
   const [config, setConfig] = useState({
-    gemini_api_key: 'AIzaSyDiqX81ElLi8tKMAlJ99Ke6tQKJByx6-yE',
+    gemini_api_key: '',
     customer_username: 'qiaoye.li',
     customer_password: 'lqy123456',
     customer_jira_url: 'https://jira.gacrnd.com:8443',
