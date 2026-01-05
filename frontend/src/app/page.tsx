@@ -25,7 +25,12 @@ export default function Home() {
     customer_jira_url: 'https://jira.gacrnd.com:8443',
     internal_username: 'uie85246',
     internal_password: 'LQY123abcde',
-    internal_jira_url: 'https://ix.jira.automotive.cloud'
+    internal_jira_url: 'https://ix.jira.automotive.cloud',
+    search_target: 'CUSTOMER',
+    customer_project: 'XH2CONTI',
+    internal_project: 'CGF',
+    customer_issuetype: 'BUG',
+    internal_issuetype: 'Problem Report (PR)'
   });
 
   const [mounted, setMounted] = React.useState(false);

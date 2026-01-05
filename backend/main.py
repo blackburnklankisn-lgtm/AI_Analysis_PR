@@ -37,6 +37,11 @@ class DiagnosticRequest(BaseModel):
     internal_password: str
     customer_jira_url: str = "https://jira.gacrnd.com:8443"
     internal_jira_url: str = "https://ix.jira.automotive.cloud"
+    search_target: str = "CUSTOMER" # "CUSTOMER" or "INTERNAL"
+    customer_project: str = "XH2CONTI"
+    internal_project: str = "CGF"
+    customer_issuetype: str = "BUG"
+    internal_issuetype: str = "Problem Report (PR)"
 
 @app.get("/health")
 def health_check():
@@ -58,6 +63,20 @@ async def run_diagnostic(req: DiagnosticRequest):
     
     temp_dir = f"data/{req.issue_key}"
     os.makedirs(temp_dir, exist_ok=True)
+
+    def robust_cleanup(path, retries=3, delay=0.5):
+        import time
+        for i in range(retries):
+            try:
+                if os.path.exists(path):
+                    shutil.rmtree(path)
+                return
+            except Exception as e:
+                if i < retries - 1:
+                    print(f"Cleanup failed (attempt {i+1}), retrying in {delay}s... Error: {e}")
+                    time.sleep(delay)
+                else:
+                    print(f"Cleanup failed after {retries} attempts: {e}")
 
     try:
         # 1. Initialization and Step 1: Fetch Current Issue Full Details
@@ -97,9 +116,14 @@ async def run_diagnostic(req: DiagnosticRequest):
         trace["stratified_keywords"] = kw_data
         trace["extracted_keywords"] = kw_data.get("core_intent", []) + kw_data.get("fingerprints", []) + kw_data.get("general_terms", [])
         
-        # 3. Step 3: Deep Search internal Jira (Intent-Locked - Plan 5)
-        project_filter = 'project = "CGF"'
-        issuetype_filter = 'issuetype = "Problem Report (PR)"'
+        # 3. Step 3: Deep Search (Dynamic Target - Plan 5 Improved)
+        active_search_connector = customer_jira if req.search_target == "CUSTOMER" else internal_jira
+        search_target_name = "客户 Jira" if req.search_target == "CUSTOMER" else "内部 Jira"
+        project_key = req.customer_project if req.search_target == "CUSTOMER" else req.internal_project
+        issuetype = req.customer_issuetype if req.search_target == "CUSTOMER" else req.internal_issuetype
+        
+        project_filter = f'project = "{project_key}"'
+        issuetype_filter = f'issuetype = "{issuetype}"'
         
         # Keyword Cleaning & Sanitization logic
         def clean_kw(k: str) -> bool:
@@ -136,9 +160,9 @@ async def run_diagnostic(req: DiagnosticRequest):
         search_query += " ORDER BY created DESC"
         trace["initial_search_query"] = search_query
         
-        print(f"Coarse Retrieval (Plan 5 - Intent Locked): Searching for up to 100 candidates with JQL: {search_query}")
-        # Search for 100 candidates first (Summary only)
-        initial_candidates = internal_jira.search_issues(search_query, max_results=100)
+        print(f"Coarse Retrieval (Plan 5 - {search_target_name}): Searching for up to 100 candidates with JQL: {search_query}")
+        # Search for candidates on the active search connector
+        initial_candidates = active_search_connector.search_issues(search_query, max_results=100)
         
         # 4. Step 4: Semantic Reranking (AI Refinement)
         print(f"Semantic Reranking: AI filtering {len(initial_candidates)} candidates down to Top 20...")
@@ -161,13 +185,22 @@ async def run_diagnostic(req: DiagnosticRequest):
             })
         
         # 6. Step 6: Fetch Full Details for Candidates
-        print(f"Fetching full details for {len(candidate_stubs)} candidates...")
+        print(f"Fetching full details for {len(candidate_stubs)} candidates from {search_target_name}...")
         full_historical_issues = []
+        # Create a lookup map for trace candidates to update them
+        trace_candidates_map = {c['key']: i for i, c in enumerate(trace["historical_candidates"])}
+        
         for stub in candidate_stubs:
             try:
-                full_issue = internal_jira.get_issue(stub["key"])
+                full_issue = active_search_connector.get_issue(stub["key"])
                 full_issue['relevance_reason'] = relevance_map.get(stub['key'], {}).get('reason', '')
                 full_historical_issues.append(full_issue)
+                
+                # Update trace with more details from full issue
+                if stub['key'] in trace_candidates_map:
+                    idx = trace_candidates_map[stub['key']]
+                    trace["historical_candidates"][idx]['root_cause'] = full_issue.get('root_cause', '未知')
+                    trace["historical_candidates"][idx]['created'] = full_issue.get('created', '')
             except Exception as e:
                 print(f"Failed to fetch details for candidate {stub['key']}: {e}")
         trace["deep_context_count"] = len(full_historical_issues)
@@ -192,10 +225,6 @@ async def run_diagnostic(req: DiagnosticRequest):
         trace["raw_prompt"] = reasoning_output["raw_prompt"]
         trace["raw_ai_response"] = reasoning_output["raw_response"]
 
-        # Cleanup
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
-
         return {
             "issue_key": req.issue_key,
             "summary": current_issue['summary'],
@@ -205,9 +234,10 @@ async def run_diagnostic(req: DiagnosticRequest):
         }
 
     except Exception as e:
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # Final Cleanup attempt
+        robust_cleanup(temp_dir)
 
 if __name__ == "__main__":
     import uvicorn

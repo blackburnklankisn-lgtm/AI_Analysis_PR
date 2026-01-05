@@ -1,0 +1,12 @@
+﻿--- Scenario: Standard Scenario ---
+JQL: project = "CGF" AND issuetype = "Problem Report (PR)" AND (text ~ "CCU 升级失败" OR text ~ "SWITCH 通讯异常") AND (text ~ "OTA" OR text ~ "eMMC" OR text ~ "0x7F" OR text ~ "NRC 11") ORDER BY created DESC
+
+--- Scenario: No Intent ---
+JQL: project = "CGF" AND issuetype = "Problem Report (PR)" AND (text ~ "CCU" OR text ~ "0x7F") ORDER BY created DESC
+
+--- Scenario: No Details ---
+JQL: project = "CGF" AND issuetype = "Problem Report (PR)" AND (text ~ "CCU 升级失败") ORDER BY created DESC
+
+--- Scenario: Special Characters (Should be cleaned) ---
+JQL: project = "CGF" AND issuetype = "Problem Report (PR)" AND (text ~ "valid_term" OR text ~ "0x7F") ORDER BY created DESC
+

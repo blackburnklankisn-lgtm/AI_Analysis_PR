@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from 'react';
-import { Settings, X, Save, Globe, ShieldCheck } from 'lucide-react';
+import { Settings, X, Save, Globe, ShieldCheck, Search } from 'lucide-react';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -80,14 +80,38 @@ export default function SettingsModal({ isOpen, onClose, onSave, initialConfig }
                 />
               </div>
             </div>
-            <div>
-              <label className="block text-xs font-medium mb-1.5 opacity-70">URL</label>
-              <input
-                type="text"
-                value={config.customer_jira_url}
-                onChange={(e) => setConfig({ ...config, customer_jira_url: e.target.value })}
-                className="w-full px-4 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm"
-              />
+            <div className="grid grid-cols-2 gap-4">
+              <div className="col-span-1">
+                <label className="block text-xs font-medium mb-1.5 opacity-70">URL</label>
+                <input
+                  type="text"
+                  value={config.customer_jira_url}
+                  onChange={(e) => setConfig({ ...config, customer_jira_url: e.target.value })}
+                  className="w-full px-4 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm"
+                />
+              </div>
+              <div className="col-span-1">
+                <label className="block text-xs font-medium mb-1.5 opacity-70">项目 ID</label>
+                <input
+                  type="text"
+                  value={config.customer_project}
+                  onChange={(e) => setConfig({ ...config, customer_project: e.target.value })}
+                  className="w-full px-4 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm"
+                  placeholder="如: XH2CONTI"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 gap-4">
+              <div>
+                <label className="block text-xs font-medium mb-1.5 opacity-70">单据类型 (Issuetype)</label>
+                <input
+                  type="text"
+                  value={config.customer_issuetype}
+                  onChange={(e) => setConfig({ ...config, customer_issuetype: e.target.value })}
+                  className="w-full px-4 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm"
+                  placeholder="如: BUG"
+                />
+              </div>
             </div>
           </div>
 
@@ -122,14 +146,70 @@ export default function SettingsModal({ isOpen, onClose, onSave, initialConfig }
                 />
               </div>
             </div>
-            <div>
-              <label className="block text-xs font-medium mb-1.5 opacity-70">URL</label>
-              <input
-                type="text"
-                value={config.internal_jira_url}
-                onChange={(e) => setConfig({ ...config, internal_jira_url: e.target.value })}
-                className="w-full px-4 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm"
-              />
+            <div className="grid grid-cols-2 gap-4">
+              <div className="col-span-1">
+                <label className="block text-xs font-medium mb-1.5 opacity-70">URL</label>
+                <input
+                  type="text"
+                  value={config.internal_jira_url}
+                  onChange={(e) => setConfig({ ...config, internal_jira_url: e.target.value })}
+                  className="w-full px-4 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm"
+                />
+              </div>
+              <div className="col-span-1">
+                <label className="block text-xs font-medium mb-1.5 opacity-70">项目 ID</label>
+                <input
+                  type="text"
+                  value={config.internal_project}
+                  onChange={(e) => setConfig({ ...config, internal_project: e.target.value })}
+                  className="w-full px-4 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm"
+                  placeholder="如: CGF"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 gap-4">
+              <div>
+                <label className="block text-xs font-medium mb-1.5 opacity-70">单据类型 (Issuetype)</label>
+                <input
+                  type="text"
+                  value={config.internal_issuetype}
+                  onChange={(e) => setConfig({ ...config, internal_issuetype: e.target.value })}
+                  className="w-full px-4 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm"
+                  placeholder="如: Problem Report (PR)"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="h-px bg-zinc-100 dark:bg-zinc-800" />
+
+          {/* Search Target Selection */}
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 font-bold">
+              <Search className="w-4 h-4" />
+              <h3>历史 PR 检索目标</h3>
+            </div>
+            <div className="flex gap-4">
+              <button
+                onClick={() => setConfig({ ...config, search_target: 'CUSTOMER' })}
+                className={`flex-1 p-3 rounded-xl border-2 transition-all text-left ${config.search_target === 'CUSTOMER'
+                  ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300'
+                  : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700'
+                  }`}
+              >
+                <div className="font-bold text-sm mb-0.5">客户 Jira</div>
+                <div className="text-[10px] opacity-70">在客户平台检索相似单据</div>
+              </button>
+              <button
+                onClick={() => setConfig({ ...config, search_target: 'INTERNAL' })}
+                className={`flex-1 p-3 rounded-xl border-2 transition-all text-left ${config.search_target === 'INTERNAL'
+                  ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300'
+                  : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700'
+                  }`}
+              >
+                <div className="font-bold text-sm mb-0.5">内部 Jira</div>
+                <div className="text-[10px] opacity-70">在公司内部库检索已解单据</div>
+              </button>
             </div>
           </div>
         </div>

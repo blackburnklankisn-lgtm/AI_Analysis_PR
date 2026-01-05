@@ -151,14 +151,31 @@ export default function ReportViewer({ report, summary, issueKey, trace }: Repor
                                                         }`}>
                                                         相似度: {cand.similarity} ({cand.score}%)
                                                     </span>
+                                                    {cand.created && (
+                                                        <span className="text-[10px] text-zinc-400">
+                                                            {new Date(cand.created).toLocaleDateString()}
+                                                        </span>
+                                                    )}
                                                 </div>
                                             </div>
                                             <h5 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 mb-1 leading-snug">{cand.summary}</h5>
-                                            <div className="flex items-start gap-2 pt-2 border-t border-zinc-100 dark:border-zinc-800 mt-2">
-                                                <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 mt-1.5 flex-shrink-0" />
-                                                <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
-                                                    <span className="font-bold text-indigo-500 mr-1">推荐理由:</span> {cand.reason}
-                                                </p>
+
+                                            <div className="space-y-2 mt-3">
+                                                <div className="flex items-start gap-2 pt-2 border-t border-zinc-100 dark:border-zinc-800">
+                                                    <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 mt-1.5 flex-shrink-0" />
+                                                    <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                                                        <span className="font-bold text-indigo-500 mr-1">推荐理由:</span> {cand.reason}
+                                                    </p>
+                                                </div>
+
+                                                {cand.root_cause && (
+                                                    <div className="flex items-start gap-2 pt-1">
+                                                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-1.5 flex-shrink-0" />
+                                                        <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                                                            <span className="font-bold text-emerald-500 mr-1">已知根因:</span> {cand.root_cause}
+                                                        </p>
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
                                     ))}

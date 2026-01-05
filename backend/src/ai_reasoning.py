@@ -8,6 +8,26 @@ class AIReasoning:
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel('gemini-2.0-flash')
 
+    def safe_generate_content(self, content: Any, max_retries: int = 3) -> Any:
+        import time
+        import google.api_core.exceptions as exceptions
+        
+        delay = 2.0
+        for i in range(max_retries + 1):
+            try:
+                return self.model.generate_content(content)
+            except exceptions.ResourceExhausted as e:
+                if i < max_retries:
+                    print(f"Gemini API 429 Resource Exhausted. Retrying in {delay}s... (Attempt {i+1}/{max_retries})")
+                    time.sleep(delay)
+                    delay *= 2
+                else:
+                    print(f"Gemini API 429 Resource Exhausted. Max retries reached: {e}")
+                    raise Exception("Gemini API 频率超限 (429 Resource Exhausted)，请稍后重试。")
+            except Exception as e:
+                print(f"Gemini API Error: {e}")
+                raise e
+
     def extract_keywords(self, issue_details: Dict[str, Any], image_paths: List[str] = None) -> Dict[str, List[str]]:
         """
         Uses AI to extract stratified search keywords:
@@ -22,8 +42,8 @@ class AIReasoning:
 **注意：禁止输出当前单据本身的 ID ({issue_details['key']})，也请排除掉过于琐碎、不具备跨单据搜索价值的临时本地路径。**
 
 请将关键词分为三类：
-1. **core_intent (核心意图)**: 描述问题的核心业务路径，通常是“组件 + 动作/故障”。例如：["CCU", "升级失败"], ["SWITCH", "响应超时"]。这是最重要的搜索词。
-2. **fingerprints (硬核指纹)**: 极其具体的报错代码 (如 0x7F, NRC 11)、软件版本号 (如 0E25...)、特定的底层驱动名。
+1. **core_intent (核心意图)**: 描述问题的核心业务路径，通常是“组件 + 动作/故障”。例如：["CCU", "升级失败"], ["SWITCH", "响应超时"]。**严格限制在 2 个最核心的组合以内**。
+2. **fingerprints (硬核指纹)**: 极其具体的报错代码 (如 0x7F, NRC 11)、软件版本号 (如 0E25...)、特定的底层驱动名。**严格限制在 3-4 个左右最具辨识度的指纹以内**。
 3. **general_terms (通用词)**: 模块名称 (如 CCU, HSM)、通用的动作。
 
 ### PR 信息
@@ -33,20 +53,24 @@ class AIReasoning:
 {comments_text}
 
 ### 任务
-请按以下 JSON 格式返回，确保 core_intent 极其精简且准确。直接输出 JSON。
+- 请按以下 JSON 格式返回。
+- **确保 core_intent 极其精简，每个词项应该是一个短语（如"组件+动作"），不要超过 2 个词项。**
+- **剔除所有包含特殊字符（如 {{ }} [ ] # :）的字符串。**
+- 直接输出 JSON。
 {{
-  "core_intent": ["词1", "词2"],
-  "fingerprints": ["词3", "词4"],
-  "general_terms": ["词5", "词6"]
+  "core_intent": ["组件+故障1", "组件+故障2"],
+  "fingerprints": ["指纹1", "指纹2", "指纹3"],
+  "general_terms": ["模块1", "动作1"]
 }}
 """
         content = [prompt_text]
         if image_paths:
             for path in image_paths:
                 if os.path.exists(path):
-                    content.append(PIL.Image.open(path))
+                    with PIL.Image.open(path) as img:
+                        content.append(img.copy())
 
-        response = self.model.generate_content(content)
+        response = self.safe_generate_content(content)
         import json
         import re
         try:
@@ -92,7 +116,7 @@ class AIReasoning:
 ### 任务
 请直接按相关度从高到低返回这 {top_n} 个单据的 ID (Key)，用逗号分隔，不要多余文字。
 """
-        response = self.model.generate_content(prompt)
+        response = self.safe_generate_content(prompt)
         selected_keys = [k.strip() for k in response.text.split(',')]
         
         # Map back to original candidate objects and keep order
@@ -115,9 +139,10 @@ class AIReasoning:
         if image_paths:
             for path in image_paths:
                 if os.path.exists(path):
-                    content.append(PIL.Image.open(path))
+                    with PIL.Image.open(path) as img:
+                        content.append(img.copy())
 
-        response = self.model.generate_content(content)
+        response = self.safe_generate_content(content)
         raw_response = response.text
         
         return {
@@ -153,7 +178,7 @@ class AIReasoning:
 ]
 重点关注：错误码、组件模块、操作阶段的重合点。
 """
-        response = self.model.generate_content(prompt)
+        response = self.safe_generate_content(prompt)
         import json
         import re
         try:
