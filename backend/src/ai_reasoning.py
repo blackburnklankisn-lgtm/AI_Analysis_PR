@@ -42,7 +42,7 @@ class AIReasoning:
 **注意：禁止输出当前单据本身的 ID ({issue_details['key']})，也请排除掉过于琐碎、不具备跨单据搜索价值的临时本地路径。**
 
 请将关键词分为三类：
-1. **core_intent (核心意图)**: 描述问题的核心业务路径，通常是“组件 + 动作/故障”。例如：["CCU", "升级失败"], ["SWITCH", "响应超时"]。**严格限制在 2 个最核心的组合以内**。
+1. **core_intent (核心意图)**: 描述问题的核心业务路径，通常是"组件 + 动作/故障"。例如：["CCU", "升级失败"], ["SWITCH", "响应超时"]。**严格限制在 2 个最核心的组合以内**。
 2. **fingerprints (硬核指纹)**: 极其具体的报错代码 (如 0x7F, NRC 11)、软件版本号 (如 0E25...)、特定的底层驱动名。**严格限制在 3-4 个左右最具辨识度的指纹以内**。
 3. **general_terms (通用词)**: 模块名称 (如 CCU, HSM)、通用的动作。
 
@@ -104,7 +104,7 @@ class AIReasoning:
 **筛选准则**：
 1. **意图第一 (Intent Priority)**：优先保留体现故障本质动作（如：升级失败、响应超时）的单据。
 2. **通俗业务优先 (General Terms > Fingerprints)**：在匹配具体技术特征时，优先考虑针对模块/功能的通用词（如：OTA, eMMC, CCU），哪怕它们的版本号或具体错误地址没有对齐，也比仅匹配上一串冷门错误代码的单据更重要。
-3. **拒绝模块名泛匹配**：虽然通用词重要，但也要防止被“CCU”这种泛滥词带偏。必须是“模块+特定故障动作”的组合才选。
+3. **拒绝模块名泛匹配**：虽然通用词重要，但也要防止被"CCU"这种泛滥词带偏。必须是"模块+特定故障动作"的组合才选。
 
 ### 当前 PR
 - **标题**: {current_issue['summary']}
@@ -194,24 +194,69 @@ class AIReasoning:
             return []
 
     def _build_prompt(self, current_pr: Dict[str, Any], historical_prs: List[Dict[str, Any]], log_fingerprint: str) -> str:
+        # Build detailed historical PR section with full comments and steps
         history_text = ""
         for i, h_pr in enumerate(historical_prs):
             history_text += f"--- 历史参考 {i+1} ---\n"
             history_text += f"Key: {h_pr['key']}\n"
             history_text += f"Summary: {h_pr['summary']}\n"
-            history_text += f"描述/评论摘要: {h_pr.get('description', '')[:500]}...\n"
+            history_text += f"描述: {h_pr.get('description', '') or '无'}\n"
+            
+            # Add Steps to Reproduce for historical PR (critical for learning patterns)
+            h_steps = h_pr.get('steps_to_reproduce', '')
+            if h_steps:
+                history_text += f"重现步骤（含测试步骤、实际结果、预期结果）:\n{h_steps}\n"
+            
+            # Add full comments for historical PR
+            h_comments = h_pr.get('comments', [])
+            if h_comments:
+                history_text += "评论记录:\n"
+                for c in h_comments:
+                    history_text += f"  [{c.get('author', '未知')}]: {c.get('body', '')}\n"
+            
+            # Note about images attached to this historical PR
+            h_images = h_pr.get('images', [])
+            if h_images:
+                image_names = [img.get('filename', '') for img in h_images[:10]]
+                history_text += f"相关图片: {', '.join(image_names)}\n"
+            
             history_text += f"根因: {h_pr.get('root_cause', '未知')}\n\n"
 
+        # Current PR comments
         curr_comments = "\n".join([f"{c['author']}: {c['body']}" for c in current_pr.get('comments', [])])
+        
+        # Current PR steps to reproduce
+        curr_steps = current_pr.get('steps_to_reproduce', '') or '未提供'
+        
+        # Current PR image names
+        curr_images = current_pr.get('images', [])
+        curr_image_names = [img.get('filename', '') for img in curr_images]
+        curr_images_text = ', '.join(curr_image_names) if curr_image_names else '无'
 
         prompt = f"""
 你是一位资深汽车电子软件专家，专门负责 OTA 升级及中央计算单元 (CCU/SWITCH) 的故障诊断。
 请结合当前 PR 的全量细节、历史相似案例以及日志指纹，给出一份深度诊断报告。
 
+**重要提示**: 
+1. 本次请求包含图片附件，请仔细分析图片中的错误信息、界面截图或日志内容。
+2. **"重现步骤"字段极其重要**，它包含三部分关键信息：
+   - 【前置条件/步骤】: 复现问题的具体操作流程
+   - 【结果】: 实际观察到的异常现象
+   - 【期望】: 客户期望的正确行为
+   请务必深度分析"实际结果"与"预期结果"的差异，这是定位根因的核心线索！
+
 ### 1. 当前待诊断 PR 全量细节
 - **ID**: {current_pr['key']}
 - **标题**: {current_pr['summary']}
 - **详细描述**: {current_pr['description']}
+
+#### 1.1 重现步骤（核心诊断依据）
+**请逐条分析以下重现步骤，提取关键操作、实际结果与预期结果的差异点：**
+```
+{curr_steps}
+```
+
+- **相关图片**: {curr_images_text}
 - **评论记录**: 
 {curr_comments}
 
@@ -220,27 +265,36 @@ class AIReasoning:
 {log_fingerprint}
 \"\"\"
 
-### 3. 检索到的 Top-{len(historical_prs)} 历史相似 PR (包含评论/根因参考)
+### 3. 检索到的 Top-{len(historical_prs)} 历史相似 PR
+**请特别关注各历史案例的"重现步骤"，对比其测试流程与当前案例是否一致。**
 {history_text}
 
 ---
 ### 深度诊断任务要求
 请输出 Markdown 格式报告：
 
-#### A. 重复性与相似度深度评估
-- 对比当前 PR 与历史 Top-10 案例，是否存在高度一致的错误模式？
-- 指出最具有参考价值的历史 Key，并解释逻辑重合点。
+#### A. 重现步骤深度解析
+1. **操作流程分析**: 当前 PR 的测试步骤涉及哪些关键操作？（例如：进入扩展会话、发送诊断请求等）
+2. **实际结果 vs 预期结果**: 明确列出"实际发生了什么"与"客户期望发生什么"的核心差异。
+3. **异常点定位**: 根据步骤分析，问题最可能发生在哪一步？
 
-#### B. 故障根因深度推断 (Root Cause Analysis)
-- 结合评论中的讨论（如开发者的初步判断）和日志中的硬核证据。
-- 如果涉及 CCU/SWITCH，请区分是“通讯中断”、“逻辑死锁”还是“底层驱动错误”。
+#### B. 重复性与相似度评估
+- 对比当前 PR 与历史案例的重现步骤，是否存在相同的操作序列和错误模式？
+- 指出最具参考价值的历史 Key，并解释测试流程或错误现象的重合点。
+- **请结合图片内容**，对比当前与历史案例的截图是否呈现相同的错误现象。
 
-#### C. 专家级排查建议 (Action Plan)
-- 给出 3-5 条极具针对性的建议。
+#### C. 故障根因深度推断 (Root Cause Analysis)
+- 综合考虑：重现步骤中的操作、实际/预期差异、评论中的开发者讨论、日志指纹。
+- 如果涉及诊断通信（如 28 03 01 等 UDS 命令），请分析通信协议层面的问题。
+- 如果涉及 CAN 通道异常，请区分是"白名单配置问题"、"通信时序问题"还是"底层驱动/硬件问题"。
 
-#### D. 结论汇总
-- 一句话总结：该问题是“已知待修复”、“新发现的 Bug”、“环境配置问题”还是“硬件故障”。
+#### D. 专家级排查建议 (Action Plan)
+- 给出 3-5 条极具针对性的建议，优先针对"重现步骤"中暴露的异常点。
+
+#### E. 结论汇总
+- 一句话总结：该问题是"已知待修复"、"新发现的 Bug"、"配置问题"还是"硬件故障"。
 
 请使用严谨的中文术语，回答要硬核、专业、直击本质。
 """
         return prompt
+

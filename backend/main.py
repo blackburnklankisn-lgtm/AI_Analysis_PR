@@ -165,10 +165,10 @@ async def run_diagnostic(req: DiagnosticRequest):
         initial_candidates = active_search_connector.search_issues(search_query, max_results=100)
         
         # 4. Step 4: Semantic Reranking (AI Refinement)
-        print(f"Semantic Reranking: AI filtering {len(initial_candidates)} candidates down to Top 20...")
-        candidate_stubs = ai.rerank_candidates(current_issue, initial_candidates, top_n=20)
+        print(f"Semantic Reranking: AI filtering {len(initial_candidates)} candidates down to Top 10...")
+        candidate_stubs = ai.rerank_candidates(current_issue, initial_candidates, top_n=10)
         
-        # 5. Step 5: AI Relevance Explanation for the reranked Top 20
+        # 5. Step 5: AI Relevance Explanation for the reranked Top 10
         print(f"Generating relevance explanations for {len(candidate_stubs)} final candidates...")
         relevance_data = ai.generate_relevance_scores(current_issue, candidate_stubs)
         relevance_map = {item['key']: item for item in relevance_data}
@@ -205,6 +205,22 @@ async def run_diagnostic(req: DiagnosticRequest):
                 print(f"Failed to fetch details for candidate {stub['key']}: {e}")
         trace["deep_context_count"] = len(full_historical_issues)
 
+        # 6.5. Download images for historical PRs (max 10 per PR)
+        print(f"Downloading images for {len(full_historical_issues)} historical PRs...")
+        all_historical_image_paths = []
+        for h_issue in full_historical_issues:
+            h_image_paths = []
+            for img in h_issue.get('images', [])[:10]:  # Limit to 10 images per historical PR
+                try:
+                    dest = os.path.join(temp_dir, f"hist_{h_issue['key']}_{img['filename']}")
+                    active_search_connector.download_attachment(img['url'], dest)
+                    h_image_paths.append(dest)
+                except Exception as e:
+                    print(f"Failed to download image {img['filename']} for {h_issue['key']}: {e}")
+            h_issue['local_image_paths'] = h_image_paths
+            all_historical_image_paths.extend(h_image_paths)
+        print(f"Downloaded {len(all_historical_image_paths)} historical images total")
+
         # 7. Log Processing
         log_processor = LogProcessor()
         log_fingerprints = []
@@ -218,9 +234,12 @@ async def run_diagnostic(req: DiagnosticRequest):
         
         combined_logs = "\n\n".join(log_fingerprints) if log_fingerprints else "No logs found."
 
-        # 6. Final AI Reasoning
+        # 8. Final AI Reasoning
         print("Generating final diagnostic report with multimodal context...")
-        reasoning_output = ai.analyze_pr(current_issue, full_historical_issues, combined_logs, current_image_paths)
+        # Combine current issue images + historical PR images for multimodal analysis
+        all_image_paths = current_image_paths + all_historical_image_paths
+        print(f"Total images for AI analysis: {len(all_image_paths)} ({len(current_image_paths)} current + {len(all_historical_image_paths)} historical)")
+        reasoning_output = ai.analyze_pr(current_issue, full_historical_issues, combined_logs, all_image_paths)
         
         trace["raw_prompt"] = reasoning_output["raw_prompt"]
         trace["raw_ai_response"] = reasoning_output["raw_response"]
