@@ -6,3 +6,8 @@ pydantic
 urllib3
 python-multipart
 Pillow
+# Testing dependencies
+pytest
+pytest-html
+python-dotenv
+httpx

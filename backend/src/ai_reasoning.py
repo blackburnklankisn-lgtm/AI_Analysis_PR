@@ -5,42 +5,59 @@ import os
 
 class AIReasoning:
     def __init__(self, api_key: str):
+        # Use the latest Gemini 3.0 Flash Preview as requested
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-2.0-flash')
+        self.model_name = 'gemini-3-flash-preview'
+        self.model = genai.GenerativeModel(self.model_name)
+        print(f"AIReasoning initialized with model: {self.model_name}")
 
     def safe_generate_content(self, content: Any, max_retries: int = 3) -> Any:
         import time
         import google.api_core.exceptions as exceptions
         
         delay = 2.0
+        start_time = time.time()
+        print(f"[{self.model_name}] Starting API call...")
+        
         for i in range(max_retries + 1):
             try:
-                return self.model.generate_content(content)
+                response = self.model.generate_content(content)
+                duration = time.time() - start_time
+                print(f"[{self.model_name}] Success in {duration:.2f}s")
+                return response
             except exceptions.ResourceExhausted as e:
                 if i < max_retries:
                     print(f"Gemini API 429 Resource Exhausted. Retrying in {delay}s... (Attempt {i+1}/{max_retries})")
                     time.sleep(delay)
                     delay *= 2
                 else:
-                    print(f"Gemini API 429 Resource Exhausted. Max retries reached: {e}")
+                    print(f"Gemini API 429 Resource Exhausted. Max retries reached after {time.time()-start_time:.2f}s: {e}")
                     raise Exception("Gemini API 频率超限 (429 Resource Exhausted)，请稍后重试。")
             except Exception as e:
-                print(f"Gemini API Error: {e}")
+                print(f"Gemini API Error after {time.time()-start_time:.2f}s: {e}")
                 raise e
 
-    def extract_keywords(self, issue_details: Dict[str, Any], image_paths: List[str] = None) -> Dict[str, List[str]]:
+    def extract_keywords(self, issue_details: Dict[str, Any], image_paths: List[str] = None, exclude: List[str] = None) -> Dict[str, List[str]]:
         """
         Uses AI to extract stratified search keywords:
         - core_intent: 2-3 most critical business combo (e.g., ["SWITCH", "升级失败"])
         - fingerprints: high-value terms (error codes, version IDs, function names)
         - general_terms: module names, generic actions
+        
+        Args:
+            exclude: List of keywords to avoid (used in retry scenarios)
         """
         comments_text = "\n".join([f"{c['author']}: {c['body']}" for c in issue_details.get('comments', [])])
+        
+        # Build exclusion hint for retries
+        exclude_hint = ""
+        if exclude and len(exclude) > 0:
+            exclude_hint = f"\n**重要提示：以下关键词在之前的搜索中已使用但效果不佳，请避免使用这些关键词，尝试从其他角度提取新的核心意图：**\n已使用过的关键词（请避开）: {', '.join(exclude)}\n"
         
         prompt_text = f"""
 作为汽车电子软件诊断专家，请从以下 PR 信息中提取用于检索相似案例的关键信息。
 **注意：禁止输出当前单据本身的 ID ({issue_details['key']})，也请排除掉过于琐碎、不具备跨单据搜索价值的临时本地路径。**
-
+{exclude_hint}
 请将关键词分为三类：
 1. **core_intent (核心意图)**: 描述问题的核心业务路径，通常是"组件 + 动作/故障"。例如：["CCU", "升级失败"], ["SWITCH", "响应超时"]。**严格限制在 2 个最核心的组合以内**。
 2. **fingerprints (硬核指纹)**: 极其具体的报错代码 (如 0x7F, NRC 11)、软件版本号 (如 0E25...)、特定的底层驱动名。**严格限制在 3-4 个左右最具辨识度的指纹以内**。
@@ -87,6 +104,7 @@ class AIReasoning:
             return {"core_intent": [], "fingerprints": [], "general_terms": []}
         except:
             return {"core_intent": [], "fingerprints": [], "general_terms": []}
+
 
     def rerank_candidates(self, current_issue: Dict[str, Any], candidates: List[Dict[str, Any]], top_n: int = 20) -> List[Dict[str, Any]]:
         """

@@ -42,6 +42,8 @@ class DiagnosticRequest(BaseModel):
     internal_project: str = "CGF"
     customer_issuetype: str = "BUG"
     internal_issuetype: str = "Problem Report (PR)"
+    custom_core_intent: Optional[str] = None  # User-defined core intent keywords
+
 
 @app.get("/health")
 def health_check():
@@ -103,19 +105,26 @@ async def run_diagnostic(req: DiagnosticRequest):
         ai = AIReasoning(req.gemini_api_key)
         active_connector = customer_jira if source_name == "客户 Jira" else internal_jira
 
-        # 2. Step 2: Download Images for Current Issue & AI Keyword Extraction
-        print("Downloading images for keyword extraction...")
+        print("Downloading images for keyword extraction (limit 10)...")
         current_image_paths = []
-        for img in current_issue.get('images', []):
+        for img in current_issue.get('images', [])[:10]:
             dest = os.path.join(temp_dir, f"curr_{img['filename']}")
             active_connector.download_attachment(img['url'], dest)
             current_image_paths.append(dest)
 
-        print("Extracting keywords via AI (Stratified)...")
-        kw_data = ai.extract_keywords(current_issue, current_image_paths)
-        trace["stratified_keywords"] = kw_data
-        trace["extracted_keywords"] = kw_data.get("core_intent", []) + kw_data.get("fingerprints", []) + kw_data.get("general_terms", [])
+        # Keyword Extraction with User Override and Retry Logic (E1/E2/E3)
+        MIN_CANDIDATES = 3
+        MAX_KEYWORD_RETRIES = 3
+        all_candidates = []
+        excluded_keywords = []
         
+        # Keyword Cleaning & Sanitization logic
+        def clean_kw(k: str) -> bool:
+            if any(char in k for char in ['{', '}', '[', ']', '#', ':', '\"']): return False
+            if len(k) > 40: return False
+            if len(k.strip()) < 2: return False
+            return True
+
         # 3. Step 3: Deep Search (Dynamic Target - Plan 5 Improved)
         active_search_connector = customer_jira if req.search_target == "CUSTOMER" else internal_jira
         search_target_name = "客户 Jira" if req.search_target == "CUSTOMER" else "内部 Jira"
@@ -125,48 +134,92 @@ async def run_diagnostic(req: DiagnosticRequest):
         project_filter = f'project = "{project_key}"'
         issuetype_filter = f'issuetype = "{issuetype}"'
         
-        # Keyword Cleaning & Sanitization logic
-        def clean_kw(k: str) -> bool:
-            if any(char in k for char in ['{', '}', '[', ']', '#', ':', '\"']): return False
-            if len(k) > 40: return False
-            if len(k.strip()) < 2: return False
-            return True
-
-        # Extract and clean groups
-        raw_intents = kw_data.get("core_intent", [])
-        raw_generals = kw_data.get("general_terms", [])
-        raw_fingerprints = kw_data.get("fingerprints", [])
-
-        valid_intents = [k for k in raw_intents if clean_kw(k)]
-        valid_details = [k for k in raw_generals if clean_kw(k)] + [k for k in raw_fingerprints if clean_kw(k)]
-        
-        # Construct Groups
-        intent_list = [f'text ~ "{k}"' for k in valid_intents]
-        detail_list = [f'text ~ "{k}"' for k in valid_details]
-        
-        intent_clause = f"({' OR '.join(intent_list)})" if intent_list else ""
-        detail_clause = f"({' OR '.join(detail_list)})" if detail_list else ""
-        
-        # Combine everything with User's specific logic: (Intent ORs) AND (Detail ORs)
-        search_query = f"{project_filter} AND {issuetype_filter}"
-        
-        if intent_clause and detail_clause:
-            search_query += f" AND {intent_clause} AND {detail_clause}"
-        elif intent_clause:
-            search_query += f" AND {intent_clause}"
-        elif detail_clause:
-            search_query += f" AND {detail_clause}"
+        # Helper function to build JQL and search
+        def search_with_keywords(intents, details):
+            intent_list = [f'text ~ "{k}"' for k in intents if clean_kw(k)]
+            detail_list = [f'text ~ "{k}"' for k in details if clean_kw(k)]
             
-        search_query += " ORDER BY created DESC"
-        trace["initial_search_query"] = search_query
+            intent_clause = f"({' OR '.join(intent_list)})" if intent_list else ""
+            detail_clause = f"({' OR '.join(detail_list)})" if detail_list else ""
+            
+            jql = f"{project_filter} AND {issuetype_filter}"
+            if intent_clause and detail_clause:
+                jql += f" AND {intent_clause} AND {detail_clause}"
+            elif intent_clause:
+                jql += f" AND {intent_clause}"
+            elif detail_clause:
+                jql += f" AND {detail_clause}"
+            jql += " ORDER BY created DESC"
+            
+            return jql, active_search_connector.search_issues(jql, max_results=100)
         
-        print(f"Coarse Retrieval (Plan 5 - {search_target_name}): Searching for up to 100 candidates with JQL: {search_query}")
-        # Search for candidates on the active search connector
-        initial_candidates = active_search_connector.search_issues(search_query, max_results=100)
+        # Retry loop for keyword extraction (E1/E2)
+        kw_data = None
+        final_jql = ""
+        
+        for attempt in range(MAX_KEYWORD_RETRIES):
+            print(f"Keyword extraction attempt {attempt + 1}/{MAX_KEYWORD_RETRIES}...")
+            
+            # E3: Use user-provided core intent if available, otherwise AI extract
+            if req.custom_core_intent and attempt == 0:
+                # User provided custom core intent - use it directly
+                user_intents = [k.strip() for k in req.custom_core_intent.split(',') if k.strip()]
+                print(f"Using user-provided core intent: {user_intents}")
+                
+                # Still extract fingerprints and general_terms via AI
+                ai_kw_data = ai.extract_keywords(current_issue, current_image_paths)
+                kw_data = {
+                    "core_intent": user_intents,  # User override
+                    "fingerprints": ai_kw_data.get("fingerprints", []),
+                    "general_terms": ai_kw_data.get("general_terms", [])
+                }
+            else:
+                # AI extraction (with exclusion for retries)
+                print(f"Extracting keywords via AI (excluded: {excluded_keywords})...")
+                kw_data = ai.extract_keywords(current_issue, current_image_paths, exclude=excluded_keywords)
+            
+            trace["stratified_keywords"] = kw_data
+            trace["extracted_keywords"] = kw_data.get("core_intent", []) + kw_data.get("fingerprints", []) + kw_data.get("general_terms", [])
+            
+            # Extract and prepare keywords
+            raw_intents = kw_data.get("core_intent", [])
+            raw_generals = kw_data.get("general_terms", [])
+            raw_fingerprints = kw_data.get("fingerprints", [])
+            valid_intents = [k for k in raw_intents if clean_kw(k)]
+            valid_details = [k for k in raw_generals if clean_kw(k)] + [k for k in raw_fingerprints if clean_kw(k)]
+            
+            # Search with current keywords
+            final_jql, new_candidates = search_with_keywords(valid_intents, valid_details)
+            trace["initial_search_query"] = final_jql
+            print(f"Search attempt {attempt + 1}: Found {len(new_candidates)} candidates")
+            
+            # Accumulate unique candidates (E2)
+            existing_keys = {c['key'] for c in all_candidates}
+            for c in new_candidates:
+                if c['key'] not in existing_keys:
+                    all_candidates.append(c)
+            
+            print(f"Total accumulated candidates: {len(all_candidates)}")
+            
+            # Stop if we have enough candidates
+            if len(all_candidates) >= MIN_CANDIDATES:
+                print(f"Sufficient candidates found ({len(all_candidates)} >= {MIN_CANDIDATES})")
+                break
+            
+            # E1/E2: Record used keywords for next retry
+            excluded_keywords.extend(raw_intents)
+            
+            if attempt < MAX_KEYWORD_RETRIES - 1:
+                print(f"Not enough candidates, retrying with different keywords...")
+        
+        # Use accumulated candidates for downstream processing
+        initial_candidates = all_candidates
+        print(f"Final candidate count after all retries: {len(initial_candidates)}")
         
         # 4. Step 4: Semantic Reranking (AI Refinement)
-        print(f"Semantic Reranking: AI filtering {len(initial_candidates)} candidates down to Top 10...")
-        candidate_stubs = ai.rerank_candidates(current_issue, initial_candidates, top_n=10)
+        print(f"Semantic Reranking: AI filtering {len(initial_candidates)} candidates down to Top 20...")
+        candidate_stubs = ai.rerank_candidates(current_issue, initial_candidates, top_n=20)
+
         
         # 5. Step 5: AI Relevance Explanation for the reranked Top 10
         print(f"Generating relevance explanations for {len(candidate_stubs)} final candidates...")
@@ -205,7 +258,7 @@ async def run_diagnostic(req: DiagnosticRequest):
                 print(f"Failed to fetch details for candidate {stub['key']}: {e}")
         trace["deep_context_count"] = len(full_historical_issues)
 
-        # 6.5. Download images for historical PRs (max 10 per PR)
+        # 6.5. Download images for historical PRs (max 3 per PR)
         print(f"Downloading images for {len(full_historical_issues)} historical PRs...")
         all_historical_image_paths = []
         for h_issue in full_historical_issues:
@@ -240,6 +293,7 @@ async def run_diagnostic(req: DiagnosticRequest):
         all_image_paths = current_image_paths + all_historical_image_paths
         print(f"Total images for AI analysis: {len(all_image_paths)} ({len(current_image_paths)} current + {len(all_historical_image_paths)} historical)")
         reasoning_output = ai.analyze_pr(current_issue, full_historical_issues, combined_logs, all_image_paths)
+        print("Final diagnostic report generated successfully.")
         
         trace["raw_prompt"] = reasoning_output["raw_prompt"]
         trace["raw_ai_response"] = reasoning_output["raw_response"]

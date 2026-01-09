@@ -21,7 +21,8 @@ class JiraConnector:
             self.jira = JIRA(
                 server=self.server_url,
                 basic_auth=(self.username, self.token),
-                options={"verify": False}
+                options={"verify": False},
+                timeout=30
             )
         except Exception as e:
             print(f"Error connecting to Jira {self.server_url}: {e}")

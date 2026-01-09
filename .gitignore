@@ -3,7 +3,26 @@ node_modules/
 .venv/
 venv/
 env/
-__pycache__/
+# Build artifacts
+backend/dist/
+backend/build/
+backend/*.spec
+backend/server.log
+backend/test_output.txt
+electron/dist/
+electron/backend/dist/
+electron/frontend/out/
+
+# Temporary test scripts
+backend/stress_test_gemini.py
+backend/test_gemini_3.py
+backend/test_jira.py
+backend/trigger_test.py
+
+# Others
+.agent/
+.env
+**/__pycache__/
 *.pyc
 *.pyo
 *.pyd
@@ -17,12 +36,13 @@ build/
 backend/data/*
 !backend/data/.gitkeep
 
-# Local environment files
+# Local environment files (⚠️ IMPORTANT: Contains API keys!)
 .env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+backend/.env
 
 # IDEs
 .vscode/
@@ -31,3 +51,10 @@ backend/data/*
 # System Files
 .DS_Store
 Thumbs.db
+
+# Test artifacts
+backend/reports/
+.pytest_cache/
+htmlcov/
+*.html
+!frontend/**/*.html

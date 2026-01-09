@@ -212,7 +212,52 @@ export default function SettingsModal({ isOpen, onClose, onSave, initialConfig }
               </button>
             </div>
           </div>
+
+          <div className="h-px bg-zinc-100 dark:bg-zinc-800" />
+
+          {/* Auto-Save Settings */}
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 font-bold">
+              <Save className="w-4 h-4" />
+              <h3>自动保存设置</h3>
+            </div>
+            <div className="flex items-center justify-between p-3 rounded-xl border border-zinc-200 dark:border-zinc-800">
+              <div>
+                <div className="font-medium text-sm">自动保存诊断报告</div>
+                <div className="text-[10px] text-zinc-500">报告生成后自动下载 Markdown 文件</div>
+              </div>
+              <button
+                onClick={() => setConfig({ ...config, auto_save_enabled: !config.auto_save_enabled })}
+                className={`relative w-12 h-6 rounded-full transition-colors ${config.auto_save_enabled ? 'bg-indigo-600' : 'bg-zinc-300 dark:bg-zinc-600'
+                  }`}
+              >
+                <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform shadow ${config.auto_save_enabled ? 'translate-x-7' : 'translate-x-1'
+                  }`} />
+              </button>
+            </div>
+
+            {/* Save Path Configuration */}
+            {config.auto_save_enabled && (
+              <div className="space-y-2">
+                <label className="block text-xs font-medium opacity-70">保存路径</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={config.save_path || ''}
+                    onChange={(e) => setConfig({ ...config, save_path: e.target.value })}
+                    placeholder="留空则使用浏览器默认下载目录"
+                    className="flex-1 px-4 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm"
+                  />
+                </div>
+                <div className="text-[11px] text-zinc-400 italic">
+                  注：浏览器安全限制，文件会自动保存到浏览器下载目录
+                </div>
+              </div>
+            )}
+          </div>
         </div>
+
+
 
         <div className="p-6 bg-zinc-50 dark:bg-zinc-800/50 flex justify-end gap-3">
           <button onClick={onClose} className="px-4 py-2 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors">
